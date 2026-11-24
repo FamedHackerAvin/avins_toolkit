@@ -4,6 +4,7 @@ import httpx
 import logging
 from bs4 import BeautifulSoup
 from urllib.parse import urlsplit, urljoin, urldefrag
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,7 @@ class Crawler:
         self.q = deque(self.config.seeds)
         self.visited = set()
         self.failures = {}
+        self.seen = set(self.config.seeds)
         self.client = httpx.Client(
             follow_redirects=True,
         )
@@ -40,6 +42,7 @@ class Crawler:
         # Log errors in case of unreachable hyperlinks
         try:
             r = self.client.get(site)
+            time.sleep(self.config.delay)
         except httpx.RequestError as err:
             logger.warning(f"{site}: Network_error")
             self.failures[site] = "Network_error"
@@ -50,7 +53,7 @@ class Crawler:
             if status_code == 404:
                 logger.warning(f"Resource not found (404) at {request_url}")
             elif 400 <= status_code < 500:
-                logger.error(f"Client error {status_code} for {request_url}: {r.text}")
+                logger.error(f"Client error {status_code} for {request_url}")
             elif status_code >= 500:
                 logger.warning(f"Server error {status_code} from {request_url}")
             self.failures[site] = status_code
@@ -62,7 +65,10 @@ class Crawler:
                 soup = BeautifulSoup(r.text, "html.parser")
                 clean_text = soup.get_text(separator=" ", strip=True)
                 for a in soup.find_all("a", href=True):
-                    self.q.append(self._clean_links(a.get("href"), site))
+                    cleaned_link = self._clean_link(a.get("href"), site)
+                    if cleaned_link is not None and cleaned_link not in self.seen:
+                        self.q.append(cleaned_link)
+                        self.seen.add(cleaned_link)
                 with open("src/extracted_data.txt", "a", encoding="utf-8") as file:
                     file.write(site + "\n" + clean_text + "\n")
             else:
