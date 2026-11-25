@@ -5,6 +5,8 @@ import logging
 from bs4 import BeautifulSoup
 from urllib.parse import urlsplit, urljoin, urldefrag
 import time
+import urllib.robotparser
+from functools import cache
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +18,9 @@ class Crawler:
         self.visited = set()
         self.failures = {}
         self.seen = set(self.config.seeds)
+        self.robots_cache = {}
         self.client = httpx.Client(
-            follow_redirects=True,
+            follow_redirects=True, headers=self.config.header, timeout=self.config.timeout
         )
 
     def bfs(self):
@@ -40,9 +43,11 @@ class Crawler:
         # Scrape data and identify hyperlinks
         # Add the extracted hyperlinks to q
         # Log errors in case of unreachable hyperlinks
+        if not self.roboprotocol(site):
+            return None
+        time.sleep(self.config.delay)
         try:
             r = self.client.get(site)
-            time.sleep(self.config.delay)
         except httpx.RequestError as err:
             logger.warning(f"{site}: Network_error")
             self.failures[site] = "Network_error"
@@ -88,3 +93,36 @@ class Crawler:
             return urldefrag(site).url
         else:
             return None
+
+    def roboprotocol(self, url):
+        split = urlsplit(url)
+        source = split.scheme + "://" + split.netloc
+        if source in self.robots_cache:
+            rp = self.robots_cache[source]
+            if rp == "Allow all":
+                return True
+            elif rp == "Deny all":
+                return False
+        else:
+            try:
+                r = self.client.get(urljoin(source, "/robots.txt"))
+            except httpx.RequestError:
+                logger.warning(f"{urljoin(source, '/robots.txt')}: Network_error")
+                self.failures[urljoin(source, "/robots.txt")] = "Network_error"
+                self.robots_cache[source] = "Deny all"
+                return False
+            if not r.is_success:
+                status_code = r.status_code
+                if status_code == 404:
+                    logger.debug("Robots.txt not found:allowing all")
+                    self.robots_cache[source] = "Allow all"
+                    return True
+                else:
+                    logger.warning("Inaccessable")
+                    self.robots_cache[source] = "Deny all"
+                    return False
+            else:
+                rp = urllib.robotparser.RobotFileParser()
+                rp.parse(r.text.splitlines())
+                self.robots_cache[source] = rp
+        return rp.can_fetch("AvinsCrawler", url)
