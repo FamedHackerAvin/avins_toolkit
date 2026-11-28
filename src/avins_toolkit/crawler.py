@@ -1,12 +1,12 @@
 from collections import deque
 from avins_toolkit.configs import CrawlerConfig
+from avins_toolkit.cleaner import html_cleaner
 import httpx
 import logging
 from bs4 import BeautifulSoup
 from urllib.parse import urlsplit, urljoin, urldefrag
 import time
 import urllib.robotparser
-from functools import cache
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +64,23 @@ class Crawler:
             self.failures[site] = status_code
             return None
         else:
-            clean_text = ""
             if "text/html" in r.headers.get("content-type", "").lower():
-                self.visited.add(site)
+                cleaned_html = html_cleaner(site, r.text, 100)
+                if not cleaned_html["text"] == "":
+                    self.visited.add(site)
                 soup = BeautifulSoup(r.text, "html.parser")
-                clean_text = soup.get_text(separator=" ", strip=True)
                 for a in soup.find_all("a", href=True):
                     cleaned_link = self._clean_link(a.get("href"), site)
                     if cleaned_link is not None and cleaned_link not in self.seen:
                         self.q.append(cleaned_link)
                         self.seen.add(cleaned_link)
-                with open("src/extracted_data.txt", "a", encoding="utf-8") as file:
-                    file.write(site + "\n" + clean_text + "\n")
+                if not cleaned_html["text"] == "":
+                    with open("src/extracted_data.txt", "a", encoding="utf-8") as file:
+                        file.write(
+                            site + "\n" + cleaned_html["title"] + "\n" + cleaned_html["text"] + "\n"
+                        )
+                else:
+                    logger.debug(f"{site} did not contain sufficient data")
             else:
                 logger.debug(f"{site} does not return pdf")
 
